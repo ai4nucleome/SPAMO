@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Keep data out of git by default.
+Data/**/*.h5ad
+
+# Keep generated plots/logs out of git; labels and metrics are retained.
+results/**/*.png
+results/**/*.log

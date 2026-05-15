@@ -1,0 +1,11 @@
+Our     jaccard: 0.321718
+Our     F_measure: 0.486818
+Our     Mutual Information: 1.156004
+Our     NMI: 0.486092
+Our     AMI: 0.484053
+Our     V-measure: 0.486092
+Our     Homogeneity: 0.495724
+Our     Completeness: 0.476828
+Our     (ARI): 0.422712
+Our     (FMI): 0.487125
+Our     Avg.: 0.440279
