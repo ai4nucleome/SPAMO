@@ -1,0 +1,16 @@
+{
+  "epochs": 400,
+  "weights": [
+    1.0,
+    10.0
+  ],
+  "optimizer": "AdamW",
+  "wd": 0.05,
+  "clusters": 14,
+  "spatial_k": 6,
+  "feature_k": 20,
+  "latent_dim": 64,
+  "dropout": 0.1,
+  "lr": 0.01,
+  "lr_min": 0.0001
+}

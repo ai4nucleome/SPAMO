@@ -1,0 +1,19 @@
+name: spamo
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - r-base>=4.3
+  - r-mclust
+  - pip
+  - pip:
+      - torch>=2.1
+      - numpy
+      - scipy
+      - scikit-learn
+      - pandas
+      - anndata
+      - scanpy
+      - scikit-misc
+      - -e .

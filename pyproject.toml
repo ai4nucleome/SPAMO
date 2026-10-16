@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spamo"
+version = "1.0.0"
+description = "SPAMO: spatial multi-omics integration via dual-graph encoding and neighborhood-constrained cross-modal fusion"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "numpy", "scipy", "scikit-learn", "pandas"]
+
+[project.optional-dependencies]
+raw = ["anndata", "scanpy", "scikit-misc"]
+
+[project.scripts]
+spamo = "spamo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+spamo = ["presets/*.json", "cluster.R"]

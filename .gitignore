@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Data and outputs (large; see data/README.md)
+data/raw/
+*.h5ad
+*.h5
+runs/
+results/
+work/
+*.pt
+*.npz
+!tests/**/*.npz
+
+# R / OS / IDE
+.Rhistory
+.RData
+renv/
+.DS_Store
+.idea/
+.vscode/
