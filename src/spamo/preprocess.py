@@ -73,3 +73,49 @@ def preprocess_h5ad(rna_path, mod2_path, name, out, seed):
     np.savez_compressed(out, x1=np.asarray(x1,dtype='float32'), x2=np.asarray(x2,dtype='float32'),
         barcodes=rna.obs_names.to_numpy().astype(str), coordinates=rna.obsm['spatial'],
         coordinates2=other.obsm['spatial'])
+
+
+def preprocess_three(rna_path, adt_path, atac_path, out, seed):
+    """RNA PCA + ADT CLR-PCA + ATAC LSI for the three-modality simulation benchmark."""
+    import scanpy as sc
+    import scipy.sparse as sp
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import Normalizer
+    from sklearn.utils.extmath import randomized_svd
+
+    np.random.seed(seed)
+    ads = [sc.read_h5ad(p) for p in (rna_path, adt_path, atac_path)]
+    names = ads[0].obs_names
+    if any(not a.obs_names.is_unique for a in ads) or any(not a.obs_names.equals(names) for a in ads):
+        raise ValueError('The three modalities need identical unique obs_names.')
+    dense = lambda a: a.X.toarray() if sp.issparse(a.X) else np.asarray(a.X)
+    rna, adt, atac = ads
+    n_protein = adt.n_vars
+    sc.pp.highly_variable_genes(rna, flavor='seurat_v3', n_top_genes=min(3000, rna.n_vars))
+    sc.pp.normalize_total(rna, target_sum=1e4)
+    sc.pp.log1p(rna)
+    high = rna[:, rna.var['highly_variable']]
+    x1 = PCA(n_components=max(1, min(n_protein, rna.n_obs - 1, high.n_vars))).fit_transform(dense(high))
+
+    def clr(row):
+        scale = np.exp(np.log1p(row[row > 0]).sum() / len(row))
+        return np.log1p(row / scale)
+
+    x2 = PCA(n_components=max(1, min(n_protein, adt.n_obs - 1, adt.n_vars - 1))).fit_transform(
+        np.apply_along_axis(clr, 1, dense(adt)))
+    matrix = dense(atac)
+    rows, cols = matrix.sum(1), matrix.sum(0)
+    if (rows <= 0).any() or (cols <= 0).any():
+        raise ValueError('ATAC TF-IDF requires nonzero rows and columns.')
+    tfidf = matrix / rows[:, None] * (matrix.shape[0] / cols)
+    normalized = np.log1p(Normalizer(norm='l1').fit_transform(tfidf) * 1e4)
+    lsi = randomized_svd(normalized, max(2, min(n_protein + 1, atac.n_obs - 1, atac.n_vars - 1)))[0]
+    lsi -= lsi.mean(1, keepdims=True)
+    lsi /= lsi.std(1, ddof=1, keepdims=True)
+    x3 = lsi[:, 1:]
+    if any('spatial' not in a.obsm for a in ads):
+        raise ValueError('Each modality needs obsm["spatial"].')
+    np.savez_compressed(out, x1=np.asarray(x1, 'float32'), x2=np.asarray(x2, 'float32'),
+                        x3=np.asarray(x3, 'float32'), barcodes=names.to_numpy().astype(str),
+                        coordinates=ads[0].obsm['spatial'], coordinates2=ads[1].obsm['spatial'],
+                        coordinates3=ads[2].obsm['spatial'])

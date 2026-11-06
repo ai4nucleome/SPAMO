@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+Three-modality model for the simulation benchmark (RNA + ADT + ATAC): `SPAMOMulti`, `--preset sim`, `--mod3`,
+and `data/references/sim.csv`. The two-modality model is unchanged.
+
 ## 1.0.0
 Repository release of the model used in the paper (previously the development package `spamoRev`).
 

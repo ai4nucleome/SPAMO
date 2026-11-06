@@ -145,4 +145,82 @@ class SPAMO(nn.Module):
                     emb_recon_omics2=recon2)
 
 
+class _CrossAttention(nn.Module):
+    """Neighborhood attention with a configurable key/value width (several other modalities concatenated)."""
+
+    def __init__(self, d_model, kv_dim, dropout=0.1):
+        super().__init__()
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(kv_dim, d_model)
+        self.W_v = nn.Linear(kv_dim, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.scale = math.sqrt(d_model)
+
+    def forward(self, query, key_value, mask):
+        q, k, v = self.W_q(query), self.W_k(key_value), self.W_v(key_value)
+        row, col, n = mask.row, mask.col, mask.n
+        scores = (q[row] * k[col]).sum(-1) / self.scale
+        maxima = scores.detach().new_full((n,), -torch.inf)
+        maxima.scatter_reduce_(0, row, scores.detach(), reduce='amax', include_self=True)
+        numerator = (scores - maxima[row]).exp()
+        denominator = numerator.new_zeros(n).index_add(0, row, numerator)
+        weights = self.dropout(numerator / denominator[row])
+        out = v.new_zeros((n, v.shape[1])).index_add(0, row, weights[:, None] * v[col])
+        return self.W_o(out)
+
+
+class MultiFusion(nn.Module):
+    """Gated residual fusion for M modalities. Each modality attends to the concatenation of the others."""
+
+    def __init__(self, d, n_modalities, dropout=0.1):
+        super().__init__()
+        self.M = n_modalities
+        kv = (n_modalities - 1) * d
+        self.attn = nn.ModuleList([_CrossAttention(d, kv, dropout) for _ in range(n_modalities)])
+        self.gate = nn.Sequential(nn.Linear(d * 2 * n_modalities, d), nn.Sigmoid())
+        self.fusion_mlp = nn.Sequential(nn.Linear(d * 2 * n_modalities, d * 2), nn.GELU(), nn.Dropout(dropout),
+                                        nn.Linear(d * 2, d), nn.LayerNorm(d))
+        self.norms = nn.ModuleList([nn.LayerNorm(d) for _ in range(n_modalities)])
+
+    def forward(self, hs, mask):
+        enhanced = []
+        for m in range(self.M):
+            others = torch.cat([h for j, h in enumerate(hs) if j != m], dim=-1)
+            enhanced.append(self.norms[m](hs[m] + self.attn[m](hs[m], others, mask)))
+        u = torch.cat(list(hs) + enhanced, dim=-1)
+        gate = self.gate(u)
+        return gate * self.fusion_mlp(u) + (1 - gate) * (sum(hs) / self.M)
+
+
+class SPAMOMulti(nn.Module):
+    """Fixed dual graphs for M modalities (the three-modality simulation benchmark uses M=3).
+
+    One global graph-mixing logit per modality, neighborhood cross-attention, reconstruction only.
+    The two-modality model stays :class:`SPAMO`; this class is the generalisation used when a third modality is given.
+    """
+
+    def __init__(self, input_dims, latent_dim=64, dropout=0.1):
+        super().__init__()
+        if len(input_dims) < 2:
+            raise ValueError('SPAMOMulti needs at least two modalities.')
+        self.encoders = nn.ModuleList([RobustEncoder(dim, latent_dim, dropout) for dim in input_dims])
+        self.fusion_module = MultiFusion(latent_dim, len(input_dims), dropout)
+        self.decoders = nn.ModuleList([RobustDecoder(latent_dim, dim, dropout) for dim in input_dims])
+        self._mask_key = None
+
+    def forward(self, xs, spatials, features):
+        key = tuple(id(s) for s in spatials)
+        if self._mask_key != key:
+            self._mask = EdgeMask(spatials)
+            self._mask_key = key
+        hs = [enc(x, s, f)[0] for enc, x, s, f in zip(self.encoders, xs, spatials, features)]
+        fused = self.fusion_module(hs, self._mask)
+        out = dict(emb_latent_combined=fused)
+        for m, (dec, spatial, h) in enumerate(zip(self.decoders, spatials, hs), 1):
+            out[f'emb_latent_omics{m}'] = h
+            out[f'emb_recon_omics{m}'] = dec(fused, spatial)
+        return out
+
+
 SpaMO = SPAMO  # backwards-compatible alias

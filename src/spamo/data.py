@@ -22,26 +22,41 @@ def preset(name):
     return json.loads((Path(__file__).parent/'presets'/f'{name}.json').read_text())
 
 
+def _count_modalities(names):
+    m = 0
+    while f'x{m + 1}' in names:
+        m += 1
+    if m < 2:
+        raise ValueError('A feature file needs at least x1 and x2.')
+    return m
+
+
+def _coordinates(data, modality):
+    key = 'coordinates' if modality == 1 else f'coordinates{modality}'
+    return data[key] if key in data.files else data['coordinates']
+
+
 def prepare_cache(features, out, settings, seed):
     features, out = Path(features), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()):
         raise FileExistsError(f'Cache destination must be empty: {out}')
     with np.load(features, allow_pickle=False) as data:
-        x = [np.asarray(data[f'x{m}'], dtype='float32') for m in [1,2]]
+        modalities = _count_modalities(data.files)
+        x = [np.asarray(data[f'x{m}'], dtype='float32') for m in range(1, modalities + 1)]
         barcodes = data['barcodes'].astype(str)
-        coords = [data['coordinates'], data['coordinates2'] if 'coordinates2' in data else data['coordinates']]
+        coords = [_coordinates(data, m) for m in range(1, modalities + 1)]
         n = len(barcodes)
         if len(set(barcodes)) != n or any(t.ndim != 2 or len(t) != n or not np.isfinite(t).all() for t in x):
             raise ValueError('Features must be aligned finite matrices with unique barcodes.')
         if any(len(c) != n for c in coords):
             raise ValueError('Coordinates and feature row counts differ.')
         shutil.copyfile(features, out/'features.npz')
-        for m in [1,2]:
+        for m in range(1, modalities + 1):
             save_graph(spatial_graph(coords[m-1], settings['spatial_k']), out/f'spatial{m}.npz')
             save_graph(feature_graph(x[m-1], settings['feature_k']), out/f'feature{m}.npz')
-    names = ['features.npz','spatial1.npz','spatial2.npz','feature1.npz','feature2.npz']
-    write_json(out/'READY.json', dict(seed=seed, n=n, feature_k=settings['feature_k'],
+    names = ['features.npz'] + [f'{k}{m}.npz' for k in ('spatial', 'feature') for m in range(1, modalities + 1)]
+    write_json(out/'READY.json', dict(seed=seed, n=n, modalities=modalities, feature_k=settings['feature_k'],
         spatial_k=settings['spatial_k'], label_access=False, graph_fixed=True,
         feature_metric='cosine', feature_weight='exp(-(1-similarity))', normalized_once=True,
         files={name: sha(out/name) for name in names},
@@ -59,14 +74,15 @@ def load_cache(path, device='cpu', feature_k=None):
             raise ValueError(f'Cache checksum mismatch: {name}')
     with np.load(path/'features.npz', allow_pickle=False) as data:
         barcodes = data['barcodes'].astype(str)
-        x = [torch.from_numpy(data[f'x{m}'].astype('float32')).to(device) for m in [1,2]]
+        modalities = receipt.get('modalities') or _count_modalities(data.files)
+        x = [torch.from_numpy(data[f'x{m}'].astype('float32')).to(device) for m in range(1, modalities + 1)]
     barcode_sha = hashlib.sha256(('\n'.join(barcodes)+'\n').encode()).hexdigest()
     if barcode_sha != receipt['barcode_sha256'] or len(set(barcodes)) != len(barcodes):
         raise ValueError('Invalid barcode alignment.')
     if any(t.ndim != 2 or len(t) != len(barcodes) or not torch.isfinite(t).all() for t in x):
         raise ValueError('Invalid cached features.')
-    spatial = [load_graph(path/f'spatial{m}.npz', device) for m in [1,2]]
-    feature = [load_graph(path/f'feature{m}.npz', device) for m in [1,2]]
+    spatial = [load_graph(path/f'spatial{m}.npz', device) for m in range(1, modalities + 1)]
+    feature = [load_graph(path/f'feature{m}.npz', device) for m in range(1, modalities + 1)]
     if any(g.n != len(barcodes) for g in spatial + feature):
         raise ValueError('Graph and feature dimensions differ.')
     return x, spatial, feature, barcodes, receipt

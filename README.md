@@ -2,8 +2,8 @@
 
 **Spatial Multi-Omics Integration via Dual-Graph Encoding and Neighborhood-Constrained Cross-Modal Fusion**
 
-SPAMO integrates two spatial omics modalities measured on the same spots (RNA + ADT, RNA + ATAC) into one embedding for
-spatial-domain identification. Each modality is encoded by a two-layer GCN over **two fixed graphs** (spatial and
+SPAMO integrates spatial omics modalities measured on the same spots (RNA + ADT, RNA + ATAC, or RNA + ADT + ATAC) into one
+embedding for spatial-domain identification. Each modality is encoded by a two-layer GCN over **two fixed graphs** (spatial and
 feature-similarity), mixed by one learned global scalar per modality; the modalities are fused by cross-modal attention
 restricted to spatial neighborhoods and trained with a reconstruction loss only.
 
@@ -16,7 +16,8 @@ restricted to spatial neighborhoods and trained with a reconstruction loss only.
 | Base graphs | built once, symmetrised (max), unit self-loops, degree-normalised once; **fixed** during training |
 | Graph mixing | operator `σ(α)·S + (1 − σ(α))·F`, one scalar `α` per modality shared by both GCN layers, `σ(α) = 0.5` at start |
 | Fusion | neighborhood cross-attention (spatial mask), gated residual fusion of four concatenated blocks |
-| Loss | weighted reconstruction MSE (MB 1:10, HLN 5:1); no graph update, Frobenius, EMA or contrastive terms |
+| Loss | weighted reconstruction MSE (MB 1:10, HLN 5:1, Simulation 1:3:3); no graph update, Frobenius, EMA or contrastive terms |
+| Three modalities | `--preset sim`: one encoder, one graph logit and one decoder per modality; each modality attends to the other two |
 | Training | FP32, deterministic algorithms; MB 400 epochs AdamW (wd 0.05), HLN 200 epochs Adam (wd 0.005), LR 0.01 → 1e-4 cosine |
 | Clustering | embedding → PCA(20) → mclust (EEE → VVV → EII); k-means as sensitivity analysis |
 
@@ -92,6 +93,7 @@ Place the data as described in [`data/README.md`](data/README.md), then (5 seeds
 ```bash
 python scripts/benchmark.py --dataset hln --data-root data/raw --out runs/hln --rscript $(which Rscript) --gpus 0,1,2,3,4
 python scripts/benchmark.py --dataset mb  --data-root data/raw --out runs/mb  --rscript $(which Rscript) --gpus 0,1,2,3,4
+python scripts/benchmark.py --dataset sim --data-root data/raw --out runs/sim --rscript $(which Rscript) --gpus 0,1,2,3,4
 ```
 
 This writes `per_seed.csv` and `summary.csv` (mean/SD per method). Reference labels are in `data/references/`.

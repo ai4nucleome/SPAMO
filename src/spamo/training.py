@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 
 from .data import load_cache, sha, write_json
-from .model import SPAMO
+from .model import SPAMO, SPAMOMulti
 
 
 def setup(seed, device, threads=2):
@@ -33,6 +33,16 @@ def setup(seed, device, threads=2):
         torch.cuda.set_per_process_memory_fraction(min(.8,6*1024**3/total), device)
 
 
+def _encoders(model):
+    return model.encoders if hasattr(model, 'encoders') else [model.encoder_omics1, model.encoder_omics2]
+
+
+def _forward(model, x, spatial, feature):
+    if len(x) == 2:
+        return model(x[0], x[1], spatial[0], feature[0], spatial[1], feature[1])
+    return model(x, spatial, feature)
+
+
 def train(cache, out, settings, seed=2064, device='cpu', epochs=None):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -50,11 +60,17 @@ def train(cache, out, settings, seed=2064, device='cpu', epochs=None):
         cfg['epochs'] = epochs
     if cfg['epochs'] <= 0:
         raise ValueError('epochs must be positive.')
-    model = SPAMO(x[0].shape[1], x[1].shape[1], cfg['latent_dim'], cfg['dropout'])
+    if len(x) != len(cfg['weights']):
+        raise ValueError(f'{len(x)} modalities but {len(cfg["weights"])} reconstruction weights.')
+    if len(x) == 2:
+        model = SPAMO(x[0].shape[1], x[1].shape[1], cfg['latent_dim'], cfg['dropout'])
+    else:
+        model = SPAMOMulti([t.shape[1] for t in x], cfg['latent_dim'], cfg['dropout'])
     torch.save(model.state_dict(), out/'initial_model.pt')
     write_json(out/'config.json', dict(recipe='spamo_fixed_dual_global_half', seed=seed, settings=cfg,
         device=str(device), cache=str(Path(cache).resolve()), cache_sha256=sha(Path(cache)/'READY.json'),
-        graph_mode='fixed_dual', alpha_mode='global_per_modality', alpha_parameters=2,
+        graph_mode='fixed_dual', alpha_mode='global_per_modality', alpha_parameters=len(x),
+        modalities=len(x),
         alpha_raw_initial=0., alpha_effective_initial=.5, alpha_shared_layers=True,
         objective='weighted_reconstruction_MSE', fro=False, ema=False,
         precision='FP32', tf32=False, amp=False, label_access=False,
@@ -68,9 +84,9 @@ def train(cache, out, settings, seed=2064, device='cpu', epochs=None):
     history = []
     for epoch in range(1,cfg['epochs']+1):
         model.train()
-        result = model(x[0],x[1],spatial[0],feature[0],spatial[1],feature[1])
+        result = _forward(model, x, spatial, feature)
         loss = sum(w*F.mse_loss(result[f'emb_recon_omics{m}'],values)
-                   for m,values,w in zip([1,2],x,cfg['weights']))
+                   for m,(values,w) in enumerate(zip(x,cfg['weights']),1))
         if not torch.isfinite(loss):
             raise FloatingPointError(f'Nonfinite loss at epoch {epoch}')
         optimizer.zero_grad(set_to_none=True)
@@ -78,15 +94,14 @@ def train(cache, out, settings, seed=2064, device='cpu', epochs=None):
         optimizer.step()
         scheduler.step()
         row = dict(epoch=epoch,recon=float(loss.detach()),seconds=time.monotonic()-start,
-                   mix_spatial=[float(e.adj_fusion.alpha.sigmoid().detach())
-                                for e in [model.encoder_omics1,model.encoder_omics2]])
+                   mix_spatial=[float(e.adj_fusion.alpha.sigmoid().detach()) for e in _encoders(model)])
         history.append(row)
         if epoch == 1 or epoch%10 == 0 or epoch == cfg['epochs']:
             write_json(out/'progress.json',row)
             print(json.dumps(row),flush=True)
     model.eval()
     with torch.no_grad():
-        result = model(x[0],x[1],spatial[0],feature[0],spatial[1],feature[1])
+        result = _forward(model, x, spatial, feature)
         embedding = F.normalize(result['emb_latent_combined'],p=2,eps=1e-12,dim=1).cpu().numpy()
     np.savez_compressed(out/'embedding.npz',embedding=embedding,barcodes=barcodes)
     with (out/'embedding.csv').open('w') as handle:

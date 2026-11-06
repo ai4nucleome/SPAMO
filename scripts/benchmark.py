@@ -16,8 +16,9 @@ from pathlib import Path
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = {'hln': ('HLN/adata_RNA.h5ad', 'HLN/adata_ADT.h5ad'),
-         'mb': ('Mouse_Brain/adata_RNA.h5ad', 'Mouse_Brain/adata_peaks_normalized.h5ad')}
+FILES = {'hln': ('HLN/adata_RNA.h5ad', 'HLN/adata_ADT.h5ad', None),
+         'mb': ('Mouse_Brain/adata_RNA.h5ad', 'Mouse_Brain/adata_peaks_normalized.h5ad', None),
+         'sim': ('Simulation/adata_RNA.h5ad', 'Simulation/adata_ADT.h5ad', 'Simulation/adata_ATAC.h5ad')}
 METRICS = ['NMI', 'AMI', 'FMI', 'ARI', 'F1', 'Jaccard', 'Avg', 'Avg6']
 
 
@@ -32,7 +33,7 @@ def main():
     p.add_argument('--rscript', default=None)
     p.add_argument('--python', default=sys.executable)
     a = p.parse_args()
-    rna, mod2 = (a.data_root/f for f in FILES[a.dataset])
+    rna, mod2, mod3 = (None if f is None else a.data_root/f for f in FILES[a.dataset])
     ref = ROOT/'data'/'references'/f'{a.dataset}.csv'
     devices = ['cpu'] if a.gpus == 'cpu' else a.gpus.split(',')
     jobs = queue.Queue()
@@ -48,8 +49,12 @@ def main():
             out = a.out/f'seed_{seed}'
             if (out/'run'/'metrics.csv').exists():
                 continue
-            inputs = (['--features', a.features_template.format(seed=seed)] if a.features_template
-                      else ['--rna', str(rna), '--mod2', str(mod2)])
+            if a.features_template:
+                inputs = ['--features', a.features_template.format(seed=seed)]
+            else:
+                inputs = ['--rna', str(rna), '--mod2', str(mod2)]
+                if mod3 is not None:
+                    inputs += ['--mod3', str(mod3)]
             cmd = [a.python, '-m', 'spamo', 'run', *inputs, '--preset', a.dataset,
                    '--seed', str(seed), '--out', str(out), '--device', 'cpu' if device == 'cpu' else 'cuda:0',
                    '--reference', f'ref={ref}']

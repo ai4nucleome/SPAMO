@@ -22,14 +22,15 @@ def build_parser():
     inputs = prepare.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--features', help='NPZ: x1, x2, barcodes, coordinates; optional coordinates2')
     inputs.add_argument('--rna', help='RNA h5ad; requires --mod2')
-    prepare.add_argument('--mod2', help='ATAC h5ad for mb; ADT h5ad for hln')
-    prepare.add_argument('--preset', choices=['mb', 'hln'], required=True)
+    prepare.add_argument('--mod2', help='ADT or ATAC h5ad')
+    prepare.add_argument('--mod3', help='third modality h5ad (simulation: ATAC)')
+    prepare.add_argument('--preset', choices=['mb', 'hln', 'sim'], required=True)
     prepare.add_argument('--seed', type=int, default=2024)
     prepare.add_argument('--out', required=True)
 
     train = sub.add_parser('train', help='Train the model on a prepared cache')
     train.add_argument('--cache', required=True)
-    train.add_argument('--preset', choices=['mb', 'hln'], required=True)
+    train.add_argument('--preset', choices=['mb', 'hln', 'sim'], required=True)
     train.add_argument('--seed', type=int, default=2024)
     train.add_argument('--out', required=True)
     train.add_argument('--device', default='cpu', help='cpu or cuda:0; select the card with CUDA_VISIBLE_DEVICES')
@@ -37,7 +38,7 @@ def build_parser():
 
     cluster = sub.add_parser('cluster', help='Cluster an embedding and score optional references')
     cluster.add_argument('--run', required=True)
-    cluster.add_argument('--preset', choices=['mb', 'hln'], required=True)
+    cluster.add_argument('--preset', choices=['mb', 'hln', 'sim'], required=True)
     _add_reference_args(cluster)
 
     run = sub.add_parser('run', help='prepare + train + cluster in one command (h5ad input)')
@@ -45,7 +46,8 @@ def build_parser():
     run_inputs.add_argument('--rna', help='RNA h5ad; requires --mod2')
     run_inputs.add_argument('--features', help='preprocessed NPZ instead of h5ad (see `prepare --features`)')
     run.add_argument('--mod2')
-    run.add_argument('--preset', choices=['mb', 'hln'], required=True)
+    run.add_argument('--mod3', help='third modality h5ad; required for --preset sim')
+    run.add_argument('--preset', choices=['mb', 'hln', 'sim'], required=True)
     run.add_argument('--seed', type=int, default=2024)
     run.add_argument('--out', required=True, help='output directory (cache/ and run/ are created inside)')
     run.add_argument('--device', default='cpu')
@@ -76,20 +78,25 @@ def main(argv=None):
     if getattr(args, 'clusters', None):
         settings['clusters'] = args.clusters
 
-    def prepare_from_h5ad(rna, mod2, out):
+    def prepare_from_h5ad(rna, mod2, mod3, out):
         import torch
-        from .preprocess import preprocess_h5ad
+        from .preprocess import preprocess_h5ad, preprocess_three
         torch.set_num_threads(2)
+        if (args.preset == 'sim') != bool(mod3):
+            parser.error('--preset sim requires --mod3, and --mod3 is only used with --preset sim')
         with tempfile.TemporaryDirectory(prefix='spamo-prepare-') as directory:
             features = Path(directory)/'features.npz'
-            preprocess_h5ad(rna, mod2, args.preset, features, args.seed)
+            if mod3:
+                preprocess_three(rna, mod2, mod3, features, args.seed)
+            else:
+                preprocess_h5ad(rna, mod2, args.preset, features, args.seed)
             prepare_cache(features, out, settings, args.seed)
 
     if args.command == 'prepare':
         if args.rna:
             if not args.mod2:
                 parser.error('--rna requires --mod2')
-            prepare_from_h5ad(args.rna, args.mod2, args.out)
+            prepare_from_h5ad(args.rna, args.mod2, getattr(args, 'mod3', None), args.out)
         else:
             if args.mod2:
                 parser.error('--mod2 requires --rna')
@@ -110,7 +117,7 @@ def main(argv=None):
         if args.rna:
             if not args.mod2:
                 parser.error('--rna requires --mod2')
-            prepare_from_h5ad(args.rna, args.mod2, out/'cache')
+            prepare_from_h5ad(args.rna, args.mod2, args.mod3, out/'cache')
         else:
             prepare_cache(args.features, out/'cache', settings, args.seed)
         train(out/'cache', out/'run', settings, args.seed, args.device, args.epochs)
